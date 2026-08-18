@@ -1128,4 +1128,165 @@ mod tests {
         let a = resp.assignment.expect("expected an assignment");
         assert_eq!(a["looked_up"], 20);
     }
+
+    /// Loads the fenced ```json block out of `examples/<filename>` and
+    /// parses it as a `CspIrProblem`, so the worked examples in the repo's
+    /// `examples/` folder are checked against the real interpreter, not
+    /// just hand-derived. Used by the `example_*` tests below.
+    fn load_example(filename: &str) -> CspIrProblem {
+        let path = format!("{}/examples/{}", env!("CARGO_MANIFEST_DIR"), filename);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+        let start = text.find("```json\n").unwrap_or_else(|| panic!("{filename}: no json block found")) + "```json\n".len();
+        let end = start + text[start..].find("\n```").unwrap_or_else(|| panic!("{filename}: unterminated json block"));
+        serde_json::from_str(&text[start..end]).unwrap_or_else(|e| panic!("{filename}: invalid IR JSON: {e}"))
+    }
+
+    #[test]
+    fn example_01_send_more_money() {
+        let resp = solve_csp_ir(load_example("01_send_more_money.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let a = resp.assignment.expect("expected an assignment");
+        let send = 1000 * a["S"] + 100 * a["E"] + 10 * a["N"] + a["D"];
+        let more = 1000 * a["M"] + 100 * a["O"] + 10 * a["R"] + a["E"];
+        let money = 10000 * a["M"] + 1000 * a["O"] + 100 * a["N"] + 10 * a["E"] + a["Y"];
+        assert_eq!(send + more, money);
+        assert_ne!(a["S"], 0);
+        assert_ne!(a["M"], 0);
+    }
+
+    #[test]
+    fn example_02_n_queens() {
+        let resp = solve_csp_ir(load_example("02_n_queens.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let a = resp.assignment.expect("expected an assignment");
+        let cols: Vec<i32> = (0..8).map(|i| a[&format!("queens_{i}")]).collect();
+        let mut sorted = cols.clone();
+        sorted.sort();
+        assert_eq!(sorted, (0..8).collect::<Vec<_>>(), "columns must be pairwise distinct");
+        for i in 0..8 {
+            for j in (i + 1)..8 {
+                let row_gap = (i as i32) - (j as i32);
+                assert_ne!(cols[i] - cols[j], row_gap, "diagonal conflict between rows {i} and {j}");
+                assert_ne!(cols[i] - cols[j], -row_gap, "diagonal conflict between rows {i} and {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn example_03_traveling_salesman_finds_the_optimal_80_tour() {
+        let resp = solve_csp_ir(load_example("03_traveling_salesman.md"));
+        assert_eq!(resp.status, "OPTIMAL");
+        assert_eq!(resp.objective_value, Some(80));
+        let a = resp.assignment.expect("expected an assignment");
+        // The successor relation must be a single 4-cycle through all
+        // cities, not two disjoint 2-cycles -- exactly what MTZ rules out.
+        let mut visited = [false; 4];
+        let mut city = 0;
+        for _ in 0..4 {
+            assert!(!visited[city], "revisited city {city} before completing the tour");
+            visited[city] = true;
+            city = a[&format!("next_{city}")] as usize;
+        }
+        assert_eq!(city, 0, "tour must return to the start after visiting all 4 cities");
+    }
+
+    #[test]
+    fn example_04_house_construction_schedule() {
+        let resp = solve_csp_ir(load_example("04_house_construction_schedule.md"));
+        assert_eq!(resp.status, "OPTIMAL");
+        let a = resp.assignment.expect("expected an assignment");
+        assert_eq!(a["painting_start"] + 2, a["makespan"]);
+        assert!(a["framing_start"] >= a["foundation_start"] + 4);
+        assert!(a["plumbing_start"] >= a["framing_start"] + 6);
+        assert!(a["electrical_start"] >= a["framing_start"] + 6);
+        assert!(a["drywall_start"] >= a["plumbing_start"] + 3);
+        assert!(a["drywall_start"] >= a["electrical_start"] + 3);
+        assert!(a["painting_start"] >= a["drywall_start"] + 4);
+    }
+
+    #[test]
+    fn example_05_mini_sudoku() {
+        let resp = solve_csp_ir(load_example("05_mini_sudoku.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let a = resp.assignment.expect("expected an assignment");
+        assert_eq!(a["cell_0_0"], 1);
+        assert_eq!(a["cell_0_3"], 4);
+        assert_eq!(a["cell_1_2"], 1);
+        assert_eq!(a["cell_2_1"], 1);
+        assert_eq!(a["cell_3_0"], 4);
+        assert_eq!(a["cell_3_3"], 1);
+        for r in 0..4 {
+            let mut row: Vec<i32> = (0..4).map(|c| a[&format!("cell_{r}_{c}")]).collect();
+            row.sort();
+            assert_eq!(row, vec![1, 2, 3, 4], "row {r} must contain each digit once");
+        }
+        for c in 0..4 {
+            let mut col: Vec<i32> = (0..4).map(|r| a[&format!("cell_{r}_{c}")]).collect();
+            col.sort();
+            assert_eq!(col, vec![1, 2, 3, 4], "column {c} must contain each digit once");
+        }
+    }
+
+    #[test]
+    fn example_06_dinner_pairing_table() {
+        let resp = solve_csp_ir(load_example("06_dinner_pairing_table.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let a = resp.assignment.expect("expected an assignment");
+        assert_eq!((a["meal"], a["drink"]), (1, 1), "expected Steak(1) + Red(1)");
+    }
+
+    #[test]
+    fn example_07_knapsack_optimization() {
+        let resp = solve_csp_ir(load_example("07_knapsack_optimization.md"));
+        assert_eq!(resp.status, "OPTIMAL");
+        assert_eq!(resp.objective_value, Some(12));
+        let a = resp.assignment.expect("expected an assignment");
+        assert_eq!((a["take_A"], a["take_B"], a["take_C"], a["take_D"]), (0, 1, 0, 1));
+    }
+
+    #[test]
+    fn example_08_arithmetic_puzzle() {
+        let resp = solve_csp_ir(load_example("08_arithmetic_puzzle.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let a = resp.assignment.expect("expected an assignment");
+        assert_eq!((a["a"], a["b"], a["c"]), (3, 6, 18));
+    }
+
+    #[test]
+    fn example_09_job_sequencing() {
+        let resp = solve_csp_ir(load_example("09_job_sequencing.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let a = resp.assignment.expect("expected an assignment");
+        let durations = [3, 5, 2, 4];
+        let starts: Vec<i32> = (1..=4).map(|i| a[&format!("start_{i}")]).collect();
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                assert!(
+                    starts[i] + durations[i] <= starts[j] || starts[j] + durations[j] <= starts[i],
+                    "jobs {} and {} overlap",
+                    i + 1,
+                    j + 1
+                );
+            }
+        }
+        assert!(starts[1] > 1, "job 2 must start after time 1");
+        assert!(starts[3] <= 6, "job 4 must finish by time 10");
+    }
+
+    #[test]
+    fn example_10_dinner_party_logic() {
+        let resp = solve_csp_ir(load_example("10_dinner_party_logic.md"));
+        assert_eq!(resp.status, "SATISFIABLE");
+        let solutions = resp.solutions.expect("expected solutions");
+        assert_eq!(solutions.len(), 15);
+        for s in &solutions {
+            assert!(s["attends_alice"] == 1 || s["attends_bob"] == 1);
+            assert!(s["attends_carol"] == 0 || s["attends_dana"] == 1);
+            if s["dana_after_party"] == 1 {
+                assert_eq!(s["attends_dana"], 1);
+            }
+            let all_attend = s["attends_alice"] == 1 && s["attends_bob"] == 1 && s["attends_carol"] == 1 && s["attends_dana"] == 1;
+            assert_eq!(s["full_house"] == 1, all_attend);
+        }
+    }
 }

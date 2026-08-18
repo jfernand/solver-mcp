@@ -5,14 +5,14 @@ the CSP intermediate representation defined in
 [`../src/csp_ir.rs`](../src/csp_ir.rs) -- variable declarations, a flat
 list of constraints, and a `solve` directive.
 
-**Status**: these are worked examples of the *schema*, written by hand
-against the type definitions in `csp_ir.rs`. The interpreter that turns
-this JSON into `pumpkin_solver` calls (name resolution, building
-`AffineView`s, validating reification legality, dispatching `solve.mode`)
-doesn't exist yet -- see that file's module docs for what's left. Treat
-the JSON here as "this is what a request should look like", not as
-solver-verified output; where a file states an expected answer, it was
-worked out by hand, not by running the model.
+**Status**: solver-verified. Each file's JSON block is loaded and solved
+by `csp_ir.rs`'s own test suite (`example_01_send_more_money` through
+`example_10_dinner_party_logic`) against the real interpreter, so every
+claimed answer here -- SEND+MORE=MONEY's digits, the TSP's optimal tour
+of length 80, the knapsack's optimum of 12, the 15 valid dinner-party
+combinations -- is checked by `cargo test`, not just worked out by hand.
+If you edit one of these files, re-run the tests; a broken example fails
+loudly instead of silently drifting from what the solver actually does.
 
 | # | Example | Prose problem | Constraint kinds exercised | Solve mode |
 |---|---|---|---|---|
