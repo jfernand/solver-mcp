@@ -1,0 +1,52 @@
+name: CI
+
+# Trunk-based development: main is the only long-lived branch, so this
+# runs on every push that lands on it (direct pushes and merged PRs alike)
+# plus every pull request targeting it, so nothing reaches trunk unchecked.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Superseding pushes to the same branch/PR cancel their in-flight run
+# instead of queuing behind it -- keeps feedback fast for frequent,
+# small trunk-based commits.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --locked --verbose
+
+      # Exercises both the in-process unit tests (csp_ir.rs, csp_tools.rs,
+      # lp_tools.rs) and tests/mcp_server.rs, which spawns the compiled
+      # binary and drives it over real MCP stdio JSON-RPC.
+      - name: Test
+        run: cargo test --locked --verbose
+
+      # Informational only (no -D warnings): the repo currently carries a
+      # few pre-existing warnings (e.g. max_time_seconds fields accepted
+      # but not yet wired to termination -- see README) that are known,
+      # not regressions. Surfacing new ones here is still useful without
+      # blocking trunk on unrelated cleanup.
+      - name: Clippy (informational)
+        run: cargo clippy --all-targets --all-features
+        continue-on-error: true
