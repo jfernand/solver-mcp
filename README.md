@@ -28,28 +28,7 @@ solver libraries, single static binary.
 
 ## Build status -- read before running
 
-I scaffolded and attempted to compile this in the sandbox and hit a real
-wall worth knowing about:
-
-- The sandbox's `rustc` (installed via `apt`) is **1.75.0** (Dec 2023).
-- `pumpkin-solver`'s own dependency tree (via `clap` -> `clap_derive`, and
-  separately via `rand` -> `chacha20` -> `cpufeatures`) now requires the
-  **edition2024** Cargo feature, which needs **rustc 1.85+**.
-- The sandbox can't reach `static.rust-lang.org` / `rustup.rs` to fetch a
-  newer toolchain (outside its network allowlist), and Ubuntu's apt repos
-  (including backports) top out at 1.75.
-
-So: **this did not compile in the sandbox**, and I was not able to verify
-it end-to-end. It should compile cleanly with a current stable Rust
-(`rustup update` to 1.85+) on your own machine -- `pumpkin-solver`'s own
-published MSRV is far lower (1.72.1), the wall is purely in *transitive*
-dependency floors that have crept up since.
-
-Also double-check before running for real:
-- **`rmcp` version/API** -- I used a plausible `tool_router`/`tool`/
-  `serve_stdio` shape based on the common Rust MCP SDK pattern, but did not
-  verify current method names against docs.rs for this crate specifically.
-  Check `cargo add rmcp` and its current examples.
+Double-check before running for real:
 - **Pumpkin's `Indefinite` termination** -- swap for a real time-budgeted
   termination condition before production use; `max_time_seconds` is
   currently accepted in the request structs but not yet wired to a
