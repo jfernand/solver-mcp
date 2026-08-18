@@ -2,15 +2,17 @@ mod csp_ir;
 mod csp_tools;
 mod lp_tools;
 
-use csp_ir::{solve_csp_ir, CspIrProblem};
-use csp_tools::{solve_csp, solve_grouped_csp, solve_scheduling, CspRequest, GroupedCspRequest, ScheduleRequest};
-use lp_tools::{solve_assignment, solve_lp, AssignmentRequest, LpRequest};
+use csp_ir::{CspIrProblem, solve_csp_ir};
+use csp_tools::{
+    CspRequest, GroupedCspRequest, ScheduleRequest, solve_csp, solve_grouped_csp, solve_scheduling,
+};
+use lp_tools::{AssignmentRequest, LpRequest, solve_assignment, solve_lp};
+use rmcp::ErrorData as McpError;
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::ErrorData as McpError;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
-use rmcp::handler::server::wrapper::Parameters;
+use rmcp::{ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 
 /// The optimization brain: a self-contained MCP server exposing constraint
 /// satisfaction (Pumpkin) and linear programming (microlp) as tools. Both
@@ -40,7 +42,10 @@ impl SolverServer {
     /// puzzles, exclusion-based assignment, and feasibility checks --
     /// "does a valid arrangement exist at all", not "what's the best one".
     #[tool]
-    async fn solve_csp(&self, Parameters(req): Parameters<CspRequest>) -> Result<CallToolResult, McpError> {
+    async fn solve_csp(
+        &self,
+        Parameters(req): Parameters<CspRequest>,
+    ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_csp(req)).unwrap(),
         )]))
@@ -56,7 +61,10 @@ impl SolverServer {
     /// puzzles like the classic Zebra Puzzle, where clues relate named
     /// attributes rather than an undifferentiated pool of integers.
     #[tool]
-    async fn solve_grouped_csp(&self, Parameters(req): Parameters<GroupedCspRequest>) -> Result<CallToolResult, McpError> {
+    async fn solve_grouped_csp(
+        &self,
+        Parameters(req): Parameters<GroupedCspRequest>,
+    ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_grouped_csp(req)).unwrap(),
         )]))
@@ -68,7 +76,10 @@ impl SolverServer {
     /// Use for machine scheduling, job sequencing on shared equipment, or
     /// any single-resource rostering problem.
     #[tool]
-    async fn solve_scheduling(&self, Parameters(req): Parameters<ScheduleRequest>) -> Result<CallToolResult, McpError> {
+    async fn solve_scheduling(
+        &self,
+        Parameters(req): Parameters<ScheduleRequest>,
+    ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_scheduling(req)).unwrap(),
         )]))
@@ -91,7 +102,10 @@ impl SolverServer {
     /// (SEND+MORE=MONEY, N-Queens, TSP, job-shop scheduling, knapsack,
     /// Sudoku, and more) paired with their IR formulation.
     #[tool]
-    async fn solve_csp_ir(&self, Parameters(req): Parameters<CspIrProblem>) -> Result<CallToolResult, McpError> {
+    async fn solve_csp_ir(
+        &self,
+        Parameters(req): Parameters<CspIrProblem>,
+    ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_csp_ir(req)).unwrap(),
         )]))
@@ -103,7 +117,10 @@ impl SolverServer {
     /// problems -- anything where fractional variable values are
     /// meaningful and all relationships are linear.
     #[tool]
-    async fn solve_lp(&self, Parameters(req): Parameters<LpRequest>) -> Result<CallToolResult, McpError> {
+    async fn solve_lp(
+        &self,
+        Parameters(req): Parameters<LpRequest>,
+    ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_lp(req)).unwrap(),
         )]))
@@ -114,7 +131,10 @@ impl SolverServer {
     /// maximizing) total cost, with each agent getting exactly one task.
     /// Use for worker-to-task, order-to-warehouse, or ad-to-slot matching.
     #[tool]
-    async fn solve_assignment(&self, Parameters(req): Parameters<AssignmentRequest>) -> Result<CallToolResult, McpError> {
+    async fn solve_assignment(
+        &self,
+        Parameters(req): Parameters<AssignmentRequest>,
+    ) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_assignment(req)).unwrap(),
         )]))
@@ -124,15 +144,23 @@ impl SolverServer {
 #[tool_handler]
 impl ServerHandler for SolverServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("solver-mcp", env!("CARGO_PKG_VERSION")))
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+        .with_server_info(Implementation::new("solver-mcp", env!("CARGO_PKG_VERSION")))
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let server = SolverServer::new();
-    let service = server.serve(stdio()).await?;
-    service.waiting().await?;
+    let service = server
+        .serve(stdio())
+        .await?;
+    service
+        .waiting()
+        .await?;
     Ok(())
 }

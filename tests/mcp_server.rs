@@ -11,28 +11,38 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
 use rmcp::transport::TokioChildProcess;
 use rmcp::{RoleClient, ServiceExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 async fn spawn_client() -> RunningService<RoleClient, ()> {
     let transport = TokioChildProcess::new(Command::new(env!("CARGO_BIN_EXE_solver-mcp")))
         .expect("failed to spawn solver-mcp");
-    ()
-        .serve(transport)
+    ().serve(transport)
         .await
         .expect("MCP initialize handshake failed")
 }
 
-async fn call_tool_json(client: &RunningService<RoleClient, ()>, name: &'static str, args: Value) -> Value {
+async fn call_tool_json(
+    client: &RunningService<RoleClient, ()>,
+    name: &'static str,
+    args: Value,
+) -> Value {
     let result = client
         .call_tool(
-            CallToolRequestParams::new(name)
-                .with_arguments(args.as_object().unwrap().clone()),
+            CallToolRequestParams::new(name).with_arguments(
+                args.as_object()
+                    .unwrap()
+                    .clone(),
+            ),
         )
         .await
         .unwrap_or_else(|e| panic!("tools/call {name} failed: {e}"));
 
-    assert_ne!(result.is_error, Some(true), "{name} reported an error: {result:?}");
+    assert_ne!(
+        result.is_error,
+        Some(true),
+        "{name} reported an error: {result:?}"
+    );
     let text = result
         .content
         .iter()
@@ -46,13 +56,32 @@ async fn call_tool_json(client: &RunningService<RoleClient, ()>, name: &'static 
 async fn lists_all_tools() {
     let client = spawn_client().await;
 
-    let tools = client.list_all_tools().await.expect("tools/list failed");
-    let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    for expected in ["solve_csp", "solve_grouped_csp", "solve_scheduling", "solve_csp_ir", "solve_lp", "solve_assignment"] {
+    let tools = client
+        .list_all_tools()
+        .await
+        .expect("tools/list failed");
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|t| {
+            t.name
+                .as_ref()
+        })
+        .collect();
+    for expected in [
+        "solve_csp",
+        "solve_grouped_csp",
+        "solve_scheduling",
+        "solve_csp_ir",
+        "solve_lp",
+        "solve_assignment",
+    ] {
         assert!(names.contains(&expected), "missing tool: {expected}");
     }
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }
 
 #[tokio::test]
@@ -71,9 +100,18 @@ async fn calls_solve_csp() {
     )
     .await;
     assert_eq!(parsed["status"], "SATISFIABLE");
-    assert_eq!(parsed["assignment"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        parsed["assignment"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }
 
 #[tokio::test]
@@ -98,12 +136,19 @@ async fn calls_solve_grouped_csp() {
     )
     .await;
     assert_eq!(parsed["status"], "SATISFIABLE");
-    let color_red = parsed["assignment"]["Color"]["Red"].as_i64().unwrap();
-    let pet_dog = parsed["assignment"]["Pet"]["Dog"].as_i64().unwrap();
+    let color_red = parsed["assignment"]["Color"]["Red"]
+        .as_i64()
+        .unwrap();
+    let pet_dog = parsed["assignment"]["Pet"]["Dog"]
+        .as_i64()
+        .unwrap();
     assert_eq!(color_red, pet_dog);
     assert_eq!(parsed["assignment"]["Color"]["Green"], 2);
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }
 
 #[tokio::test]
@@ -122,9 +167,18 @@ async fn calls_solve_scheduling() {
     )
     .await;
     assert_eq!(parsed["status"], "SATISFIABLE");
-    assert_eq!(parsed["starts"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        parsed["starts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }
 
 #[tokio::test]
@@ -152,10 +206,15 @@ async fn calls_solve_csp_ir() {
     )
     .await;
     assert_eq!(parsed["status"], "SATISFIABLE");
-    let assignment = parsed["assignment"].as_object().unwrap();
+    let assignment = parsed["assignment"]
+        .as_object()
+        .unwrap();
     assert_eq!(assignment.len(), 3);
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }
 
 #[tokio::test]
@@ -175,7 +234,10 @@ async fn calls_solve_lp() {
     assert_eq!(parsed["status"], "OPTIMAL");
     assert_eq!(parsed["objective_value"], 10.0);
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }
 
 #[tokio::test]
@@ -194,5 +256,8 @@ async fn calls_solve_assignment() {
     assert_eq!(parsed["status"], "OPTIMAL");
     assert_eq!(parsed["total_cost"], 2.0);
 
-    client.cancel().await.expect("clean shutdown failed");
+    client
+        .cancel()
+        .await
+        .expect("clean shutdown failed");
 }

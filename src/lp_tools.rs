@@ -67,7 +67,11 @@ pub fn solve_lp(req: LpRequest) -> LpResponse {
 
     for c in &req.constraints {
         let op = parse_op(&c.op);
-        let terms: Vec<_> = vars.iter().zip(&c.coeffs).map(|(&v, &co)| (v, co)).collect();
+        let terms: Vec<_> = vars
+            .iter()
+            .zip(&c.coeffs)
+            .map(|(&v, &co)| (v, co))
+            .collect();
         problem.add_constraint(terms, op, c.rhs);
     }
 
@@ -75,7 +79,11 @@ pub fn solve_lp(req: LpRequest) -> LpResponse {
         Ok(microlp::SolveOutcome::Solution(solution)) => LpResponse {
             status: "OPTIMAL".into(),
             objective_value: Some(solution.objective()),
-            values: Some(vars.iter().map(|&v| solution[v]).collect()),
+            values: Some(
+                vars.iter()
+                    .map(|&v| solution[v])
+                    .collect(),
+            ),
         },
         _ => LpResponse {
             status: "INFEASIBLE".into(),
@@ -109,7 +117,9 @@ pub struct AssignmentResponse {
 /// vice versa. Modeled as a binary-variable LP. Use for worker-to-task,
 /// order-to-warehouse, or similar one-to-one matching problems.
 pub fn solve_assignment(req: AssignmentRequest) -> AssignmentResponse {
-    let n = req.cost_matrix.len();
+    let n = req
+        .cost_matrix
+        .len();
     let direction = if req.maximize {
         OptimizationDirection::Maximize
     } else {
@@ -128,11 +138,15 @@ pub fn solve_assignment(req: AssignmentRequest) -> AssignmentResponse {
     }
 
     for i in 0..n {
-        let row: Vec<_> = (0..n).map(|j| (x[i][j], 1.0)).collect();
+        let row: Vec<_> = (0..n)
+            .map(|j| (x[i][j], 1.0))
+            .collect();
         problem.add_constraint(row, ComparisonOp::Eq, 1.0);
     }
     for j in 0..n {
-        let col: Vec<_> = (0..n).map(|i| (x[i][j], 1.0)).collect();
+        let col: Vec<_> = (0..n)
+            .map(|i| (x[i][j], 1.0))
+            .collect();
         problem.add_constraint(col, ComparisonOp::Eq, 1.0);
     }
 
@@ -178,10 +192,19 @@ mod tests {
             var_bounds: vec![(0.0, 20.0), (0.0, 20.0)],
         });
         assert_eq!(resp.status, "OPTIMAL");
-        let values = resp.values.expect("expected variable values");
+        let values = resp
+            .values
+            .expect("expected variable values");
         assert!((values[0] - 10.0).abs() < 1e-6);
         assert!((values[1] - 0.0).abs() < 1e-6);
-        assert!((resp.objective_value.unwrap() - 10.0).abs() < 1e-6);
+        assert!(
+            (resp
+                .objective_value
+                .unwrap()
+                - 10.0)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -204,8 +227,14 @@ mod tests {
             var_bounds: vec![(0.0, 10.0)],
         });
         assert_eq!(resp.status, "INFEASIBLE");
-        assert!(resp.values.is_none());
-        assert!(resp.objective_value.is_none());
+        assert!(
+            resp.values
+                .is_none()
+        );
+        assert!(
+            resp.objective_value
+                .is_none()
+        );
     }
 
     #[test]
@@ -215,10 +244,19 @@ mod tests {
             maximize: false,
         });
         assert_eq!(resp.status, "OPTIMAL");
-        let mut assignment = resp.assignment.expect("expected an assignment");
+        let mut assignment = resp
+            .assignment
+            .expect("expected an assignment");
         assignment.sort();
         assert_eq!(assignment, vec![(0, 0), (1, 1)]);
-        assert!((resp.total_cost.unwrap() - 2.0).abs() < 1e-6);
+        assert!(
+            (resp
+                .total_cost
+                .unwrap()
+                - 2.0)
+                .abs()
+                < 1e-6
+        );
     }
 
     #[test]
@@ -228,9 +266,18 @@ mod tests {
             maximize: true,
         });
         assert_eq!(resp.status, "OPTIMAL");
-        let mut assignment = resp.assignment.expect("expected an assignment");
+        let mut assignment = resp
+            .assignment
+            .expect("expected an assignment");
         assignment.sort();
         assert_eq!(assignment, vec![(0, 1), (1, 0)]);
-        assert!((resp.total_cost.unwrap() - 4.0).abs() < 1e-6);
+        assert!(
+            (resp
+                .total_cost
+                .unwrap()
+                - 4.0)
+                .abs()
+                < 1e-6
+        );
     }
 }

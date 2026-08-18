@@ -5,9 +5,7 @@
 //! all-different, and cumulative-resource scheduling. For pure linear
 //! optimization (resource allocation, assignment problems) see `lp_tools.rs`.
 
-use pumpkin_solver::{
-    Solver,
-};
+use pumpkin_solver::Solver;
 use pumpkin_solver::conflict_resolvers::resolvers::ResolutionResolver;
 use pumpkin_solver::core::results::{ProblemSolution, SatisfactionResult};
 use pumpkin_solver::core::termination::Indefinite;
@@ -64,8 +62,8 @@ pub fn solve_csp(req: CspRequest) -> CspResponse {
     }
 
     let mut termination = Indefinite; // wrap with a real time-budgeted
-                                       // termination condition in production;
-                                       // Indefinite is illustrative here.
+    // termination condition in production;
+    // Indefinite is illustrative here.
     let mut brancher = solver.default_brancher();
     let mut resolver = ResolutionResolver::default();
 
@@ -82,11 +80,11 @@ pub fn solve_csp(req: CspRequest) -> CspResponse {
                 assignment: Some(assignment),
             }
         }
-        SatisfactionResult::Unsatisfiable(_,_,_) => CspResponse {
+        SatisfactionResult::Unsatisfiable(_, _, _) => CspResponse {
             status: "UNSATISFIABLE".into(),
             assignment: None,
         },
-        SatisfactionResult::Unknown(_,_,_) => CspResponse {
+        SatisfactionResult::Unknown(_, _, _) => CspResponse {
             status: "TIMEOUT".into(),
             assignment: None,
         },
@@ -186,7 +184,11 @@ fn grouped_csp_error(message: String) -> GroupedCspResponse {
 pub fn solve_grouped_csp(req: GroupedCspRequest) -> GroupedCspResponse {
     let mut group_names = HashSet::new();
     for group in &req.groups {
-        if !group_names.insert(group.name.clone()) {
+        if !group_names.insert(
+            group
+                .name
+                .clone(),
+        ) {
             return grouped_csp_error(format!("duplicate group name '{}'", group.name));
         }
         let mut value_names = HashSet::new();
@@ -211,8 +213,20 @@ pub fn solve_grouped_csp(req: GroupedCspRequest) -> GroupedCspResponse {
             .iter()
             .map(|_| solver.new_bounded_integer(req.domain_min, req.domain_max))
             .collect();
-        for (value, &var) in group.values.iter().zip(vars.iter()) {
-            var_map.insert((group.name.clone(), value.clone()), var);
+        for (value, &var) in group
+            .values
+            .iter()
+            .zip(vars.iter())
+        {
+            var_map.insert(
+                (
+                    group
+                        .name
+                        .clone(),
+                    value.clone(),
+                ),
+                var,
+            );
         }
         group_vars.push(vars);
     }
@@ -228,7 +242,12 @@ pub fn solve_grouped_csp(req: GroupedCspRequest) -> GroupedCspResponse {
 
     macro_rules! resolve {
         ($r:expr) => {
-            match var_map.get(&($r.group.clone(), $r.value.clone())) {
+            match var_map.get(&(
+                $r.group
+                    .clone(),
+                $r.value
+                    .clone(),
+            )) {
                 Some(&v) => v,
                 None => {
                     return grouped_csp_error(format!(
@@ -307,7 +326,13 @@ pub fn solve_grouped_csp(req: GroupedCspRequest) -> GroupedCspResponse {
             let solution = satisfiable.solution();
             let mut assignment: HashMap<String, HashMap<String, i32>> = HashMap::new();
             for group in &req.groups {
-                assignment.entry(group.name.clone()).or_default();
+                assignment
+                    .entry(
+                        group
+                            .name
+                            .clone(),
+                    )
+                    .or_default();
             }
             for ((group_name, value_name), var) in &var_map {
                 assignment
@@ -363,7 +388,9 @@ pub struct ScheduleResponse {
 /// job-shop-style problems, and rostering with a single shared resource.
 pub fn solve_scheduling(req: ScheduleRequest) -> ScheduleResponse {
     let mut solver = Solver::default();
-    let n = req.durations.len();
+    let n = req
+        .durations
+        .len();
 
     let starts: Vec<_> = (0..n)
         .map(|_| solver.new_bounded_integer(0, req.horizon))
@@ -373,8 +400,10 @@ pub fn solve_scheduling(req: ScheduleRequest) -> ScheduleResponse {
     solver
         .add_constraint(pumpkin_constraints::cumulative(
             starts.clone(),
-            req.durations.clone(),
-            req.demands.clone(),
+            req.durations
+                .clone(),
+            req.demands
+                .clone(),
             req.capacity,
             tag,
         ))
@@ -422,9 +451,15 @@ mod tests {
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "SATISFIABLE");
-        let assignment = resp.assignment.expect("expected an assignment");
+        let assignment = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(assignment.len(), 3);
-        assert!(assignment.iter().all(|&v| (0..=5).contains(&v)));
+        assert!(
+            assignment
+                .iter()
+                .all(|&v| (0..=5).contains(&v))
+        );
     }
 
     #[test]
@@ -438,11 +473,17 @@ mod tests {
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "SATISFIABLE");
-        let assignment = resp.assignment.expect("expected an assignment");
+        let assignment = resp
+            .assignment
+            .expect("expected an assignment");
         let mut sorted = assignment.clone();
         sorted.sort();
         sorted.dedup();
-        assert_eq!(sorted.len(), assignment.len(), "values must be pairwise distinct");
+        assert_eq!(
+            sorted.len(),
+            assignment.len(),
+            "values must be pairwise distinct"
+        );
     }
 
     #[test]
@@ -456,7 +497,10 @@ mod tests {
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "UNSATISFIABLE");
-        assert!(resp.assignment.is_none());
+        assert!(
+            resp.assignment
+                .is_none()
+        );
     }
 
     #[test]
@@ -483,21 +527,42 @@ mod tests {
             domain_max: 3,
             relations: vec![
                 Relation::Equals {
-                    a: VarRef { group: "Color".into(), value: "Red".into() },
-                    b: VarRef { group: "Pet".into(), value: "Dog".into() },
+                    a: VarRef {
+                        group: "Color".into(),
+                        value: "Red".into(),
+                    },
+                    b: VarRef {
+                        group: "Pet".into(),
+                        value: "Dog".into(),
+                    },
                 },
                 Relation::Offset {
-                    a: VarRef { group: "Color".into(), value: "Green".into() },
-                    b: VarRef { group: "Color".into(), value: "Blue".into() },
+                    a: VarRef {
+                        group: "Color".into(),
+                        value: "Green".into(),
+                    },
+                    b: VarRef {
+                        group: "Color".into(),
+                        value: "Blue".into(),
+                    },
                     offset: 1,
                 },
                 Relation::Distance {
-                    a: VarRef { group: "Pet".into(), value: "Cat".into() },
-                    b: VarRef { group: "Pet".into(), value: "Bird".into() },
+                    a: VarRef {
+                        group: "Pet".into(),
+                        value: "Cat".into(),
+                    },
+                    b: VarRef {
+                        group: "Pet".into(),
+                        value: "Bird".into(),
+                    },
                     distance: 1,
                 },
                 Relation::Constant {
-                    a: VarRef { group: "Drink".into(), value: "Milk".into() },
+                    a: VarRef {
+                        group: "Drink".into(),
+                        value: "Milk".into(),
+                    },
                     value: 2,
                 },
             ],
@@ -505,17 +570,26 @@ mod tests {
         });
 
         assert_eq!(resp.status, "SATISFIABLE");
-        let assignment = resp.assignment.expect("expected an assignment");
+        let assignment = resp
+            .assignment
+            .expect("expected an assignment");
         let color = &assignment["Color"];
         let pet = &assignment["Pet"];
         let drink = &assignment["Drink"];
 
         // Each group's values occupy distinct houses.
         for group in [color, pet, drink] {
-            let mut houses: Vec<i32> = group.values().copied().collect();
+            let mut houses: Vec<i32> = group
+                .values()
+                .copied()
+                .collect();
             houses.sort();
             houses.dedup();
-            assert_eq!(houses.len(), group.len(), "group values must be pairwise distinct");
+            assert_eq!(
+                houses.len(),
+                group.len(),
+                "group values must be pairwise distinct"
+            );
         }
 
         assert_eq!(color["Red"], pet["Dog"]);
@@ -539,19 +613,31 @@ mod tests {
             domain_max: 2,
             relations: vec![
                 Relation::Constant {
-                    a: VarRef { group: "Color".into(), value: "Red".into() },
+                    a: VarRef {
+                        group: "Color".into(),
+                        value: "Red".into(),
+                    },
                     value: 2,
                 },
                 Relation::Offset {
-                    a: VarRef { group: "Color".into(), value: "Green".into() },
-                    b: VarRef { group: "Color".into(), value: "Red".into() },
+                    a: VarRef {
+                        group: "Color".into(),
+                        value: "Green".into(),
+                    },
+                    b: VarRef {
+                        group: "Color".into(),
+                        value: "Red".into(),
+                    },
                     offset: 1,
                 },
             ],
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "UNSATISFIABLE");
-        assert!(resp.assignment.is_none());
+        assert!(
+            resp.assignment
+                .is_none()
+        );
     }
 
     #[test]
@@ -564,13 +650,19 @@ mod tests {
             domain_min: 1,
             domain_max: 2,
             relations: vec![Relation::Constant {
-                a: VarRef { group: "Color".into(), value: "Purple".into() },
+                a: VarRef {
+                    group: "Color".into(),
+                    value: "Purple".into(),
+                },
                 value: 1,
             }],
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.is_some());
+        assert!(
+            resp.error
+                .is_some()
+        );
     }
 
     #[test]
@@ -585,7 +677,9 @@ mod tests {
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "SATISFIABLE");
-        let starts = resp.starts.expect("expected start times");
+        let starts = resp
+            .starts
+            .expect("expected start times");
         assert_eq!(starts.len(), 2);
         // Non-overlapping: one task's interval must end before the other starts.
         let (s0, s1) = (starts[0], starts[1]);
@@ -606,6 +700,9 @@ mod tests {
             max_time_seconds: 5,
         });
         assert_eq!(resp.status, "UNSATISFIABLE");
-        assert!(resp.starts.is_none());
+        assert!(
+            resp.starts
+                .is_none()
+        );
     }
 }

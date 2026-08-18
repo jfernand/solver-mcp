@@ -113,18 +113,20 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+use pumpkin_solver::Solver;
 use pumpkin_solver::conflict_resolvers::resolvers::ResolutionResolver;
-use pumpkin_solver::core::constraints::{Constraint as PkConstraint, NegatableConstraint as PkNegatableConstraint};
-use pumpkin_solver::core::optimisation::linear_sat_unsat::LinearSatUnsat;
+use pumpkin_solver::core::DefaultBrancher;
+use pumpkin_solver::core::constraints::{
+    Constraint as PkConstraint, NegatableConstraint as PkNegatableConstraint,
+};
 use pumpkin_solver::core::optimisation::OptimisationDirection;
-use pumpkin_solver::core::results::{OptimisationResult, ProblemSolution, SatisfactionResult};
-use pumpkin_solver::core::results::solution_iterator::IteratedSolution;
+use pumpkin_solver::core::optimisation::linear_sat_unsat::LinearSatUnsat;
 use pumpkin_solver::core::results::SolutionReference;
+use pumpkin_solver::core::results::solution_iterator::IteratedSolution;
+use pumpkin_solver::core::results::{OptimisationResult, ProblemSolution, SatisfactionResult};
 use pumpkin_solver::core::termination::TimeBudget;
 use pumpkin_solver::core::variables::{AffineView, DomainId, Literal, TransformableVariable};
-use pumpkin_solver::core::DefaultBrancher;
 use pumpkin_solver::propagators::disjunctive::ArgDisjunctiveTask;
-use pumpkin_solver::Solver;
 
 /// A variable declaration. Every variable has a name, unique within the
 /// problem, used to reference it from `constraints` and `solve`.
@@ -288,7 +290,10 @@ pub enum SolveMode {
     /// single integer objective variable, not an arbitrary expression;
     /// route a linear combination through an auxiliary variable tied to
     /// it with `LinearEq` if you need to optimise a derived quantity).
-    Optimise { objective: String, direction: Direction },
+    Optimise {
+        objective: String,
+        direction: Direction,
+    },
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -347,19 +352,33 @@ enum ResolvedReification {
     Reify(Literal),
 }
 
-fn resolve_expr(vars: &HashMap<String, ResolvedVar>, expr: &Expr) -> Result<AffineView<DomainId>, String> {
+fn resolve_expr(
+    vars: &HashMap<String, ResolvedVar>,
+    expr: &Expr,
+) -> Result<AffineView<DomainId>, String> {
     if expr.scale == 0 {
         return Err(format!("scale must not be 0 (variable '{}')", expr.var));
     }
     match vars.get(&expr.var) {
-        Some(ResolvedVar::Int(id)) => Ok(id.scaled(expr.scale).offset(expr.offset)),
-        Some(ResolvedVar::Bool(lit)) => Ok(lit.get_integer_variable().scaled(expr.scale).offset(expr.offset)),
+        Some(ResolvedVar::Int(id)) => Ok(id
+            .scaled(expr.scale)
+            .offset(expr.offset)),
+        Some(ResolvedVar::Bool(lit)) => Ok(lit
+            .get_integer_variable()
+            .scaled(expr.scale)
+            .offset(expr.offset)),
         None => Err(format!("unknown variable '{}'", expr.var)),
     }
 }
 
-fn resolve_exprs(vars: &HashMap<String, ResolvedVar>, exprs: &[Expr]) -> Result<Vec<AffineView<DomainId>>, String> {
-    exprs.iter().map(|e| resolve_expr(vars, e)).collect()
+fn resolve_exprs(
+    vars: &HashMap<String, ResolvedVar>,
+    exprs: &[Expr],
+) -> Result<Vec<AffineView<DomainId>>, String> {
+    exprs
+        .iter()
+        .map(|e| resolve_expr(vars, e))
+        .collect()
 }
 
 fn resolve_bool(vars: &HashMap<String, ResolvedVar>, r: &BoolRef) -> Result<Literal, String> {
@@ -373,8 +392,13 @@ fn resolve_bool(vars: &HashMap<String, ResolvedVar>, r: &BoolRef) -> Result<Lite
     }
 }
 
-fn resolve_bools(vars: &HashMap<String, ResolvedVar>, refs: &[BoolRef]) -> Result<Vec<Literal>, String> {
-    refs.iter().map(|r| resolve_bool(vars, r)).collect()
+fn resolve_bools(
+    vars: &HashMap<String, ResolvedVar>,
+    refs: &[BoolRef],
+) -> Result<Vec<Literal>, String> {
+    refs.iter()
+        .map(|r| resolve_bool(vars, r))
+        .collect()
 }
 
 fn resolve_reification(
@@ -383,22 +407,34 @@ fn resolve_reification(
 ) -> Result<Option<ResolvedReification>, String> {
     Ok(match reification {
         None => None,
-        Some(Reification::ImpliedBy { literal }) => Some(ResolvedReification::ImpliedBy(resolve_bool(vars, literal)?)),
-        Some(Reification::Reify { literal }) => Some(ResolvedReification::Reify(resolve_bool(vars, literal)?)),
+        Some(Reification::ImpliedBy { literal }) => {
+            Some(ResolvedReification::ImpliedBy(resolve_bool(vars, literal)?))
+        }
+        Some(Reification::Reify { literal }) => {
+            Some(ResolvedReification::Reify(resolve_bool(vars, literal)?))
+        }
     })
 }
 
 /// Posts a plain `Constraint` (no defined negation): `None` -> `.post()`,
 /// `ImpliedBy` -> `.implied_by()`. `Reify` is a request-time error, since
 /// there's nothing for `<->` to negate.
-fn post<C: PkConstraint>(solver: &mut Solver, constraint: C, reification: Option<ResolvedReification>) -> Result<(), String> {
+fn post<C: PkConstraint>(
+    solver: &mut Solver,
+    constraint: C,
+    reification: Option<ResolvedReification>,
+) -> Result<(), String> {
     match reification {
         None => {
-            solver.add_constraint(constraint).post();
+            solver
+                .add_constraint(constraint)
+                .post();
             Ok(())
         }
         Some(ResolvedReification::ImpliedBy(literal)) => {
-            solver.add_constraint(constraint).implied_by(literal);
+            solver
+                .add_constraint(constraint)
+                .implied_by(literal);
             Ok(())
         }
         Some(ResolvedReification::Reify(_)) => Err(
@@ -411,21 +447,34 @@ fn post<C: PkConstraint>(solver: &mut Solver, constraint: C, reification: Option
 
 /// Posts a `NegatableConstraint`: `None` -> `.post()`, `ImpliedBy` ->
 /// `.implied_by()`, `Reify` -> `.reify()`.
-fn post_negatable<C: PkNegatableConstraint>(solver: &mut Solver, constraint: C, reification: Option<ResolvedReification>) {
+fn post_negatable<C: PkNegatableConstraint>(
+    solver: &mut Solver,
+    constraint: C,
+    reification: Option<ResolvedReification>,
+) {
     match reification {
         None => {
-            solver.add_constraint(constraint).post();
+            solver
+                .add_constraint(constraint)
+                .post();
         }
         Some(ResolvedReification::ImpliedBy(literal)) => {
-            solver.add_constraint(constraint).implied_by(literal);
+            solver
+                .add_constraint(constraint)
+                .implied_by(literal);
         }
         Some(ResolvedReification::Reify(literal)) => {
-            solver.add_constraint(constraint).reify(literal);
+            solver
+                .add_constraint(constraint)
+                .reify(literal);
         }
     }
 }
 
-fn read_assignment<S: ProblemSolution>(solution: &S, vars: &HashMap<String, ResolvedVar>) -> HashMap<String, i32> {
+fn read_assignment<S: ProblemSolution>(
+    solution: &S,
+    vars: &HashMap<String, ResolvedVar>,
+) -> HashMap<String, i32> {
     vars.iter()
         .map(|(name, resolved)| {
             let value = match resolved {
@@ -447,44 +496,84 @@ fn post_constraint(
         ConstraintKind::LinearEq { terms, rhs } => {
             let terms = resolve_exprs(vars, &terms)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::equals(terms, rhs, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::equals(terms, rhs, tag),
+                reification,
+            );
         }
         ConstraintKind::LinearNeq { terms, rhs } => {
             let terms = resolve_exprs(vars, &terms)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::not_equals(terms, rhs, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::not_equals(terms, rhs, tag),
+                reification,
+            );
         }
         ConstraintKind::LinearLeq { terms, rhs } => {
             let terms = resolve_exprs(vars, &terms)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::less_than_or_equals(terms, rhs, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::less_than_or_equals(terms, rhs, tag),
+                reification,
+            );
         }
         ConstraintKind::LinearLt { terms, rhs } => {
             let terms = resolve_exprs(vars, &terms)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::less_than(terms, rhs, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::less_than(terms, rhs, tag),
+                reification,
+            );
         }
         ConstraintKind::LinearGeq { terms, rhs } => {
             let terms = resolve_exprs(vars, &terms)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::greater_than_or_equals(terms, rhs, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::greater_than_or_equals(terms, rhs, tag),
+                reification,
+            );
         }
         ConstraintKind::LinearGt { terms, rhs } => {
             let terms = resolve_exprs(vars, &terms)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::greater_than(terms, rhs, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::greater_than(terms, rhs, tag),
+                reification,
+            );
         }
         ConstraintKind::Plus { a, b, c } => {
-            let (a, b, c) = (resolve_expr(vars, &a)?, resolve_expr(vars, &b)?, resolve_expr(vars, &c)?);
+            let (a, b, c) = (
+                resolve_expr(vars, &a)?,
+                resolve_expr(vars, &b)?,
+                resolve_expr(vars, &c)?,
+            );
             let tag = solver.new_constraint_tag();
             post(solver, pumpkin_constraints::plus(a, b, c, tag), reification)?;
         }
         ConstraintKind::Times { a, b, c } => {
-            let (a, b, c) = (resolve_expr(vars, &a)?, resolve_expr(vars, &b)?, resolve_expr(vars, &c)?);
+            let (a, b, c) = (
+                resolve_expr(vars, &a)?,
+                resolve_expr(vars, &b)?,
+                resolve_expr(vars, &c)?,
+            );
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::times(a, b, c, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::times(a, b, c, tag),
+                reification,
+            )?;
         }
-        ConstraintKind::Division { numerator, denominator, rhs } => {
+        ConstraintKind::Division {
+            numerator,
+            denominator,
+            rhs,
+        } => {
             let numerator = resolve_expr(vars, &numerator)?;
             let denominator = resolve_expr(vars, &denominator)?;
             let rhs = resolve_expr(vars, &rhs)?;
@@ -496,29 +585,54 @@ fn post_constraint(
                 );
             }
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::division(numerator, denominator, rhs, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::division(numerator, denominator, rhs, tag),
+                reification,
+            )?;
         }
         ConstraintKind::Absolute { signed, absolute } => {
             let (signed, absolute) = (resolve_expr(vars, &signed)?, resolve_expr(vars, &absolute)?);
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::absolute(signed, absolute, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::absolute(signed, absolute, tag),
+                reification,
+            )?;
         }
         ConstraintKind::Maximum { array, m } => {
             let (array, m) = (resolve_exprs(vars, &array)?, resolve_expr(vars, &m)?);
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::maximum(array, m, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::maximum(array, m, tag),
+                reification,
+            )?;
         }
         ConstraintKind::Minimum { array, m } => {
             let (array, m) = (resolve_exprs(vars, &array)?, resolve_expr(vars, &m)?);
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::minimum(array, m, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::minimum(array, m, tag),
+                reification,
+            )?;
         }
         ConstraintKind::AllDifferent { vars: names } => {
             let terms = resolve_exprs(vars, &names)?;
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::all_different(terms, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::all_different(terms, tag),
+                reification,
+            )?;
         }
-        ConstraintKind::Cumulative { starts, durations, demands, capacity } => {
+        ConstraintKind::Cumulative {
+            starts,
+            durations,
+            demands,
+            capacity,
+        } => {
             if starts.len() != durations.len() || starts.len() != demands.len() {
                 return Err(format!(
                     "cumulative: starts ({}), durations ({}), and demands ({}) must have equal length",
@@ -529,7 +643,11 @@ fn post_constraint(
             }
             let starts = resolve_exprs(vars, &starts)?;
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::cumulative(starts, durations, demands, capacity, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::cumulative(starts, durations, demands, capacity, tag),
+                reification,
+            )?;
         }
         ConstraintKind::Disjunctive { starts, durations } => {
             if starts.len() != durations.len() {
@@ -543,36 +661,67 @@ fn post_constraint(
             let tasks: Vec<_> = starts
                 .into_iter()
                 .zip(durations)
-                .map(|(start_time, processing_time)| ArgDisjunctiveTask { start_time, processing_time })
+                .map(|(start_time, processing_time)| ArgDisjunctiveTask {
+                    start_time,
+                    processing_time,
+                })
                 .collect();
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::disjunctive_strict(tasks, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::disjunctive_strict(tasks, tag),
+                reification,
+            )?;
         }
         ConstraintKind::Element { array, index, rhs } => {
             let array = resolve_exprs(vars, &array)?;
             let index = resolve_expr(vars, &index)?;
             let rhs = resolve_expr(vars, &rhs)?;
             let tag = solver.new_constraint_tag();
-            post(solver, pumpkin_constraints::element(index, array, rhs, tag), reification)?;
+            post(
+                solver,
+                pumpkin_constraints::element(index, array, rhs, tag),
+                reification,
+            )?;
         }
-        ConstraintKind::Table { vars: names, tuples, negated } => {
+        ConstraintKind::Table {
+            vars: names,
+            tuples,
+            negated,
+        } => {
             let terms = resolve_exprs(vars, &names)?;
             let tag = solver.new_constraint_tag();
             if negated {
-                post_negatable(solver, pumpkin_constraints::negative_table(terms, tuples, tag), reification);
+                post_negatable(
+                    solver,
+                    pumpkin_constraints::negative_table(terms, tuples, tag),
+                    reification,
+                );
             } else {
-                post_negatable(solver, pumpkin_constraints::table(terms, tuples, tag), reification);
+                post_negatable(
+                    solver,
+                    pumpkin_constraints::table(terms, tuples, tag),
+                    reification,
+                );
             }
         }
         ConstraintKind::Clause { literals } => {
             let literals = resolve_bools(vars, &literals)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::clause(literals, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::clause(literals, tag),
+                reification,
+            );
         }
         ConstraintKind::Conjunction { literals } => {
             let literals = resolve_bools(vars, &literals)?;
             let tag = solver.new_constraint_tag();
-            post_negatable(solver, pumpkin_constraints::conjunction(literals, tag), reification);
+            post_negatable(
+                solver,
+                pumpkin_constraints::conjunction(literals, tag),
+                reification,
+            );
         }
     }
     Ok(())
@@ -600,7 +749,10 @@ fn build_solver(
                 (name, ResolvedVar::Bool(lit))
             }
         };
-        if vars.insert(name.clone(), resolved).is_some() {
+        if vars
+            .insert(name.clone(), resolved)
+            .is_some()
+        {
             return Err(format!("duplicate variable name '{name}'"));
         }
     }
@@ -628,11 +780,19 @@ fn empty_response(status: &str) -> CspIrResponse {
 /// docs for what "resolves" entails and what gets reported as `ERROR`
 /// rather than risking a panic.
 pub fn solve_csp_ir(req: CspIrProblem) -> CspIrResponse {
-    solve_csp_ir_inner(req).unwrap_or_else(|error| CspIrResponse { error: Some(error), ..empty_response("ERROR") })
+    solve_csp_ir_inner(req).unwrap_or_else(|error| CspIrResponse {
+        error: Some(error),
+        ..empty_response("ERROR")
+    })
 }
 
 fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
-    let CspIrProblem { variables, constraints, solve, max_time_seconds } = req;
+    let CspIrProblem {
+        variables,
+        constraints,
+        solve,
+        max_time_seconds,
+    } = req;
     let (mut solver, vars) = build_solver(variables, constraints)?;
 
     match solve {
@@ -645,7 +805,10 @@ fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
                 SatisfactionResult::Satisfiable(satisfiable) => {
                     let solution = satisfiable.solution();
                     let assignment = read_assignment(&solution, &vars);
-                    CspIrResponse { assignment: Some(assignment), ..empty_response("SATISFIABLE") }
+                    CspIrResponse {
+                        assignment: Some(assignment),
+                        ..empty_response("SATISFIABLE")
+                    }
                 }
                 SatisfactionResult::Unsatisfiable(..) => empty_response("UNSATISFIABLE"),
                 SatisfactionResult::Unknown(..) => empty_response("TIMEOUT"),
@@ -655,12 +818,15 @@ fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
             let mut termination = TimeBudget::starting_now(Duration::from_secs(max_time_seconds));
             let mut brancher = solver.default_brancher();
             let mut resolver = ResolutionResolver::default();
-            let mut iterator = solver.get_solution_iterator(&mut brancher, &mut termination, &mut resolver);
+            let mut iterator =
+                solver.get_solution_iterator(&mut brancher, &mut termination, &mut resolver);
             let mut solutions = Vec::new();
             let mut timed_out = false;
             while solutions.len() < max_solutions {
                 match iterator.next_solution() {
-                    IteratedSolution::Solution(solution, _, _, _) => solutions.push(read_assignment(&solution, &vars)),
+                    IteratedSolution::Solution(solution, _, _, _) => {
+                        solutions.push(read_assignment(&solution, &vars))
+                    }
                     IteratedSolution::Finished | IteratedSolution::Unsatisfiable => break,
                     IteratedSolution::Unknown => {
                         timed_out = true;
@@ -675,15 +841,21 @@ fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
             } else {
                 "UNSATISFIABLE"
             };
-            Ok(CspIrResponse { solutions: Some(solutions), ..empty_response(status) })
+            Ok(CspIrResponse {
+                solutions: Some(solutions),
+                ..empty_response(status)
+            })
         }
-        SolveMode::Optimise { objective, direction } => {
+        SolveMode::Optimise {
+            objective,
+            direction,
+        } => {
             let objective_id = match vars.get(&objective) {
                 Some(ResolvedVar::Int(id)) => *id,
                 Some(ResolvedVar::Bool(_)) => {
                     return Err(format!(
                         "objective '{objective}' is declared as a bool variable; `optimise` needs an int variable"
-                    ))
+                    ));
                 }
                 None => return Err(format!("unknown variable '{objective}'")),
             };
@@ -694,9 +866,11 @@ fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
             let mut termination = TimeBudget::starting_now(Duration::from_secs(max_time_seconds));
             let mut brancher = solver.default_brancher();
             let mut resolver = ResolutionResolver::default();
-            let callback = |_: &Solver, _: SolutionReference, _: &DefaultBrancher, _: &ResolutionResolver| -> ControlFlow<()> {
-                ControlFlow::Continue(())
-            };
+            let callback = |_: &Solver,
+                            _: SolutionReference,
+                            _: &DefaultBrancher,
+                            _: &ResolutionResolver|
+             -> ControlFlow<()> { ControlFlow::Continue(()) };
             let result = solver.optimise(
                 &mut brancher,
                 &mut termination,
@@ -707,16 +881,26 @@ fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
                 OptimisationResult::Optimal(solution) => {
                     let objective_value = Some(solution.get_integer_value(objective_id));
                     let assignment = Some(read_assignment(&solution, &vars));
-                    CspIrResponse { assignment, objective_value, ..empty_response("OPTIMAL") }
+                    CspIrResponse {
+                        assignment,
+                        objective_value,
+                        ..empty_response("OPTIMAL")
+                    }
                 }
                 OptimisationResult::Satisfiable(solution) => {
                     let objective_value = Some(solution.get_integer_value(objective_id));
                     let assignment = Some(read_assignment(&solution, &vars));
-                    CspIrResponse { assignment, objective_value, ..empty_response("SATISFIABLE") }
+                    CspIrResponse {
+                        assignment,
+                        objective_value,
+                        ..empty_response("SATISFIABLE")
+                    }
                 }
                 OptimisationResult::Unsatisfiable => empty_response("UNSATISFIABLE"),
                 OptimisationResult::Unknown => empty_response("TIMEOUT"),
-                OptimisationResult::Stopped(..) => unreachable!("the solution callback never requests a stop"),
+                OptimisationResult::Stopped(..) => {
+                    unreachable!("the solution callback never requests a stop")
+                }
             })
         }
     }
@@ -727,43 +911,84 @@ mod tests {
     use super::*;
 
     fn var(name: &str) -> Expr {
-        Expr { var: name.into(), scale: 1, offset: 0 }
+        Expr {
+            var: name.into(),
+            scale: 1,
+            offset: 0,
+        }
     }
 
     fn scaled(name: &str, scale: i32) -> Expr {
-        Expr { var: name.into(), scale, offset: 0 }
+        Expr {
+            var: name.into(),
+            scale,
+            offset: 0,
+        }
     }
 
     fn lit(name: &str) -> BoolRef {
-        BoolRef { var: name.into(), negated: false }
+        BoolRef {
+            var: name.into(),
+            negated: false,
+        }
     }
 
     fn not_lit(name: &str) -> BoolRef {
-        BoolRef { var: name.into(), negated: true }
+        BoolRef {
+            var: name.into(),
+            negated: true,
+        }
     }
 
     fn int_range(name: &str, min: i32, max: i32) -> VarDecl {
-        VarDecl::IntRange { name: name.into(), min, max }
+        VarDecl::IntRange {
+            name: name.into(),
+            min,
+            max,
+        }
     }
 
     fn constraint(kind: ConstraintKind) -> ConstraintEntry {
-        ConstraintEntry { kind, reification: None }
+        ConstraintEntry {
+            kind,
+            reification: None,
+        }
     }
 
-    fn problem(variables: Vec<VarDecl>, constraints: Vec<ConstraintEntry>, solve: SolveMode) -> CspIrProblem {
-        CspIrProblem { variables, constraints, solve, max_time_seconds: 5 }
+    fn problem(
+        variables: Vec<VarDecl>,
+        constraints: Vec<ConstraintEntry>,
+        solve: SolveMode,
+    ) -> CspIrProblem {
+        CspIrProblem {
+            variables,
+            constraints,
+            solve,
+            max_time_seconds: 5,
+        }
     }
 
     #[test]
     fn satisfy_all_different_feasible() {
         let resp = solve_csp_ir(problem(
-            vec![int_range("a", 0, 2), int_range("b", 0, 2), int_range("c", 0, 2)],
-            vec![constraint(ConstraintKind::AllDifferent { vars: vec![var("a"), var("b"), var("c")] })],
+            vec![
+                int_range("a", 0, 2),
+                int_range("b", 0, 2),
+                int_range("c", 0, 2),
+            ],
+            vec![constraint(ConstraintKind::AllDifferent {
+                vars: vec![var("a"), var("b"), var("c")],
+            })],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let assignment = resp.assignment.expect("expected an assignment");
-        let mut values: Vec<i32> = assignment.values().copied().collect();
+        let assignment = resp
+            .assignment
+            .expect("expected an assignment");
+        let mut values: Vec<i32> = assignment
+            .values()
+            .copied()
+            .collect();
         values.sort();
         assert_eq!(values, vec![0, 1, 2]);
     }
@@ -771,12 +996,21 @@ mod tests {
     #[test]
     fn satisfy_all_different_infeasible() {
         let resp = solve_csp_ir(problem(
-            vec![int_range("a", 0, 1), int_range("b", 0, 1), int_range("c", 0, 1)],
-            vec![constraint(ConstraintKind::AllDifferent { vars: vec![var("a"), var("b"), var("c")] })],
+            vec![
+                int_range("a", 0, 1),
+                int_range("b", 0, 1),
+                int_range("c", 0, 1),
+            ],
+            vec![constraint(ConstraintKind::AllDifferent {
+                vars: vec![var("a"), var("b"), var("c")],
+            })],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "UNSATISFIABLE");
-        assert!(resp.assignment.is_none());
+        assert!(
+            resp.assignment
+                .is_none()
+        );
     }
 
     #[test]
@@ -784,18 +1018,34 @@ mod tests {
         // 4-queens: solvable (e.g. columns [1, 3, 0, 2]), and every solution
         // must respect both diagonal all-different constraints built purely
         // from Expr's offset -- no auxiliary variables.
-        let queens: Vec<String> = (0..4).map(|i| format!("q{i}")).collect();
-        let variables = queens.iter().map(|n| int_range(n, 0, 3)).collect();
-        let plain: Vec<Expr> = queens.iter().map(|n| var(n)).collect();
+        let queens: Vec<String> = (0..4)
+            .map(|i| format!("q{i}"))
+            .collect();
+        let variables = queens
+            .iter()
+            .map(|n| int_range(n, 0, 3))
+            .collect();
+        let plain: Vec<Expr> = queens
+            .iter()
+            .map(|n| var(n))
+            .collect();
         let diag_up: Vec<Expr> = queens
             .iter()
             .enumerate()
-            .map(|(i, n)| Expr { var: n.clone(), scale: 1, offset: i as i32 })
+            .map(|(i, n)| Expr {
+                var: n.clone(),
+                scale: 1,
+                offset: i as i32,
+            })
             .collect();
         let diag_down: Vec<Expr> = queens
             .iter()
             .enumerate()
-            .map(|(i, n)| Expr { var: n.clone(), scale: 1, offset: -(i as i32) })
+            .map(|(i, n)| Expr {
+                var: n.clone(),
+                scale: 1,
+                offset: -(i as i32),
+            })
             .collect();
 
         let resp = solve_csp_ir(problem(
@@ -808,15 +1058,31 @@ mod tests {
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let assignment = resp.assignment.expect("expected an assignment");
-        let cols: Vec<i32> = (0..4).map(|i| assignment[&format!("q{i}")]).collect();
+        let assignment = resp
+            .assignment
+            .expect("expected an assignment");
+        let cols: Vec<i32> = (0..4)
+            .map(|i| assignment[&format!("q{i}")])
+            .collect();
         let mut sorted = cols.clone();
         sorted.sort();
-        assert_eq!(sorted, vec![0, 1, 2, 3], "columns must be pairwise distinct");
+        assert_eq!(
+            sorted,
+            vec![0, 1, 2, 3],
+            "columns must be pairwise distinct"
+        );
         for i in 0..4 {
             for j in (i + 1)..4 {
-                assert_ne!(cols[i] - cols[j], (i as i32) - (j as i32), "diagonal conflict");
-                assert_ne!(cols[i] - cols[j], -((i as i32) - (j as i32)), "diagonal conflict");
+                assert_ne!(
+                    cols[i] - cols[j],
+                    (i as i32) - (j as i32),
+                    "diagonal conflict"
+                );
+                assert_ne!(
+                    cols[i] - cols[j],
+                    -((i as i32) - (j as i32)),
+                    "diagonal conflict"
+                );
             }
         }
     }
@@ -846,21 +1112,31 @@ mod tests {
         let resp = solve_csp_ir(problem(
             variables,
             vec![
-                constraint(ConstraintKind::AllDifferent { vars: letters.iter().map(|l| var(l)).collect() }),
+                constraint(ConstraintKind::AllDifferent {
+                    vars: letters
+                        .iter()
+                        .map(|l| var(l))
+                        .collect(),
+                }),
                 constraint(ConstraintKind::LinearEq { terms, rhs: 0 }),
             ],
             SolveMode::Satisfy,
         ));
 
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         let send = 1000 * a["S"] + 100 * a["E"] + 10 * a["N"] + a["D"];
         let more = 1000 * a["M"] + 100 * a["O"] + 10 * a["R"] + a["E"];
         let money = 10000 * a["M"] + 1000 * a["O"] + 100 * a["N"] + 10 * a["E"] + a["Y"];
         assert_eq!(send + more, money);
         assert_ne!(a["S"], 0);
         assert_ne!(a["M"], 0);
-        let mut digits: Vec<i32> = letters.iter().map(|l| a[*l]).collect();
+        let mut digits: Vec<i32> = letters
+            .iter()
+            .map(|l| a[*l])
+            .collect();
         digits.sort();
         digits.dedup();
         assert_eq!(digits.len(), 8, "letters must map to distinct digits");
@@ -876,12 +1152,17 @@ mod tests {
                     tuples: vec![vec![0, 0], vec![0, 2], vec![1, 1], vec![2, 2], vec![2, 0]],
                     negated: false,
                 }),
-                constraint(ConstraintKind::LinearNeq { terms: vec![var("drink")], rhs: 0 }),
+                constraint(ConstraintKind::LinearNeq {
+                    terms: vec![var("drink")],
+                    rhs: 0,
+                }),
             ],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         // The only tuple with drink != White(0) is (Steak=1, Red=1).
         assert_eq!((a["meal"], a["drink"]), (1, 1));
     }
@@ -890,19 +1171,37 @@ mod tests {
     fn implied_by_only_constrains_when_literal_is_true() {
         // trigger -> (x == 1). With trigger forced false, x is free.
         let resp = solve_csp_ir(problem(
-            vec![VarDecl::Bool { name: "trigger".into() }, int_range("x", 0, 5)],
+            vec![
+                VarDecl::Bool {
+                    name: "trigger".into(),
+                },
+                int_range("x", 0, 5),
+            ],
             vec![
                 ConstraintEntry {
-                    kind: ConstraintKind::LinearEq { terms: vec![var("x")], rhs: 1 },
-                    reification: Some(Reification::ImpliedBy { literal: lit("trigger") }),
+                    kind: ConstraintKind::LinearEq {
+                        terms: vec![var("x")],
+                        rhs: 1,
+                    },
+                    reification: Some(Reification::ImpliedBy {
+                        literal: lit("trigger"),
+                    }),
                 },
-                constraint(ConstraintKind::LinearEq { terms: vec![var("trigger")], rhs: 0 }),
-                constraint(ConstraintKind::LinearNeq { terms: vec![var("x")], rhs: 1 }),
+                constraint(ConstraintKind::LinearEq {
+                    terms: vec![var("trigger")],
+                    rhs: 0,
+                }),
+                constraint(ConstraintKind::LinearNeq {
+                    terms: vec![var("x")],
+                    rhs: 1,
+                }),
             ],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(a["trigger"], 0);
         assert_ne!(a["x"], 1);
     }
@@ -914,15 +1213,23 @@ mod tests {
             vec![VarDecl::Bool { name: "r".into() }, int_range("x", 0, 5)],
             vec![
                 ConstraintEntry {
-                    kind: ConstraintKind::LinearEq { terms: vec![var("x")], rhs: 3 },
+                    kind: ConstraintKind::LinearEq {
+                        terms: vec![var("x")],
+                        rhs: 3,
+                    },
                     reification: Some(Reification::Reify { literal: lit("r") }),
                 },
-                constraint(ConstraintKind::LinearEq { terms: vec![var("r")], rhs: 1 }),
+                constraint(ConstraintKind::LinearEq {
+                    terms: vec![var("r")],
+                    rhs: 1,
+                }),
             ],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(a["x"], 3);
     }
 
@@ -939,13 +1246,19 @@ mod tests {
                 VarDecl::Bool { name: "d".into() },
             ],
             vec![
-                constraint(ConstraintKind::Clause { literals: vec![lit("a"), lit("b")] }),
-                constraint(ConstraintKind::Clause { literals: vec![not_lit("c"), not_lit("d")] }),
+                constraint(ConstraintKind::Clause {
+                    literals: vec![lit("a"), lit("b")],
+                }),
+                constraint(ConstraintKind::Clause {
+                    literals: vec![not_lit("c"), not_lit("d")],
+                }),
             ],
             SolveMode::Enumerate { max_solutions: 100 },
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let solutions = resp.solutions.expect("expected solutions");
+        let solutions = resp
+            .solutions
+            .expect("expected solutions");
         assert_eq!(solutions.len(), 9);
     }
 
@@ -953,15 +1266,28 @@ mod tests {
     fn optimise_maximizes_knapsack_value() {
         let resp = solve_csp_ir(problem(
             vec![
-                VarDecl::Bool { name: "take_a".into() },
-                VarDecl::Bool { name: "take_b".into() },
-                VarDecl::Bool { name: "take_c".into() },
-                VarDecl::Bool { name: "take_d".into() },
+                VarDecl::Bool {
+                    name: "take_a".into(),
+                },
+                VarDecl::Bool {
+                    name: "take_b".into(),
+                },
+                VarDecl::Bool {
+                    name: "take_c".into(),
+                },
+                VarDecl::Bool {
+                    name: "take_d".into(),
+                },
                 int_range("total_value", 0, 20),
             ],
             vec![
                 constraint(ConstraintKind::LinearLeq {
-                    terms: vec![scaled("take_a", 2), scaled("take_b", 3), scaled("take_c", 4), scaled("take_d", 5)],
+                    terms: vec![
+                        scaled("take_a", 2),
+                        scaled("take_b", 3),
+                        scaled("take_c", 4),
+                        scaled("take_d", 5),
+                    ],
                     rhs: 8,
                 }),
                 constraint(ConstraintKind::LinearEq {
@@ -975,11 +1301,16 @@ mod tests {
                     rhs: 0,
                 }),
             ],
-            SolveMode::Optimise { objective: "total_value".into(), direction: Direction::Maximize },
+            SolveMode::Optimise {
+                objective: "total_value".into(),
+                direction: Direction::Maximize,
+            },
         ));
         assert_eq!(resp.status, "OPTIMAL");
         assert_eq!(resp.objective_value, Some(12));
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(a["take_b"], 1);
         assert_eq!(a["take_d"], 1);
         assert_eq!(a["take_a"], 0);
@@ -998,20 +1329,39 @@ mod tests {
                 int_range("q", 2, 2),
             ],
             vec![
-                constraint(ConstraintKind::Times { a: var("a"), b: var("b"), c: var("c") }),
-                constraint(ConstraintKind::Division { numerator: var("b"), denominator: var("a"), rhs: var("q") }),
+                constraint(ConstraintKind::Times {
+                    a: var("a"),
+                    b: var("b"),
+                    c: var("c"),
+                }),
+                constraint(ConstraintKind::Division {
+                    numerator: var("b"),
+                    denominator: var("a"),
+                    rhs: var("q"),
+                }),
                 constraint(ConstraintKind::LinearEq {
                     terms: vec![var("a"), scaled("b", -1), scaled("diff", -1)],
                     rhs: 0,
                 }),
-                constraint(ConstraintKind::Absolute { signed: var("diff"), absolute: var("three") }),
-                constraint(ConstraintKind::Maximum { array: vec![var("a"), var("b"), var("c")], m: var("c") }),
-                constraint(ConstraintKind::Minimum { array: vec![var("a"), var("b"), var("c")], m: var("a") }),
+                constraint(ConstraintKind::Absolute {
+                    signed: var("diff"),
+                    absolute: var("three"),
+                }),
+                constraint(ConstraintKind::Maximum {
+                    array: vec![var("a"), var("b"), var("c")],
+                    m: var("c"),
+                }),
+                constraint(ConstraintKind::Minimum {
+                    array: vec![var("a"), var("b"), var("c")],
+                    m: var("a"),
+                }),
             ],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!((a["a"], a["b"], a["c"]), (3, 6, 18));
     }
 
@@ -1019,11 +1369,18 @@ mod tests {
     fn unknown_variable_is_a_clean_error_not_a_panic() {
         let resp = solve_csp_ir(problem(
             vec![int_range("a", 0, 5)],
-            vec![constraint(ConstraintKind::LinearEq { terms: vec![var("nope")], rhs: 0 })],
+            vec![constraint(ConstraintKind::LinearEq {
+                terms: vec![var("nope")],
+                rhs: 0,
+            })],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.unwrap().contains("nope"));
+        assert!(
+            resp.error
+                .unwrap()
+                .contains("nope")
+        );
     }
 
     #[test]
@@ -1034,43 +1391,77 @@ mod tests {
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.unwrap().contains("duplicate"));
+        assert!(
+            resp.error
+                .unwrap()
+                .contains("duplicate")
+        );
     }
 
     #[test]
     fn reify_on_non_negatable_kind_is_an_error() {
         let resp = solve_csp_ir(problem(
-            vec![VarDecl::Bool { name: "r".into() }, int_range("a", 0, 5), int_range("b", 0, 5)],
+            vec![
+                VarDecl::Bool { name: "r".into() },
+                int_range("a", 0, 5),
+                int_range("b", 0, 5),
+            ],
             vec![ConstraintEntry {
-                kind: ConstraintKind::Plus { a: var("a"), b: var("b"), c: var("a") },
+                kind: ConstraintKind::Plus {
+                    a: var("a"),
+                    b: var("b"),
+                    c: var("a"),
+                },
                 reification: Some(Reification::Reify { literal: lit("r") }),
             }],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.unwrap().contains("negation"));
+        assert!(
+            resp.error
+                .unwrap()
+                .contains("negation")
+        );
     }
 
     #[test]
     fn bool_ref_on_int_variable_is_a_type_error() {
         let resp = solve_csp_ir(problem(
             vec![int_range("a", 0, 5)],
-            vec![constraint(ConstraintKind::Clause { literals: vec![lit("a")] })],
+            vec![constraint(ConstraintKind::Clause {
+                literals: vec![lit("a")],
+            })],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.unwrap().contains("bool"));
+        assert!(
+            resp.error
+                .unwrap()
+                .contains("bool")
+        );
     }
 
     #[test]
     fn division_by_a_domain_that_can_be_zero_is_a_clean_error() {
         let resp = solve_csp_ir(problem(
-            vec![int_range("num", 0, 5), int_range("den", 0, 5), int_range("q", 0, 5)],
-            vec![constraint(ConstraintKind::Division { numerator: var("num"), denominator: var("den"), rhs: var("q") })],
+            vec![
+                int_range("num", 0, 5),
+                int_range("den", 0, 5),
+                int_range("q", 0, 5),
+            ],
+            vec![constraint(ConstraintKind::Division {
+                numerator: var("num"),
+                denominator: var("den"),
+                rhs: var("q"),
+            })],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.unwrap().contains("denominator"));
+        assert!(
+            resp.error
+                .unwrap()
+                .contains("denominator")
+        );
     }
 
     #[test]
@@ -1086,19 +1477,31 @@ mod tests {
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "ERROR");
-        assert!(resp.error.unwrap().contains("equal length"));
+        assert!(
+            resp.error
+                .unwrap()
+                .contains("equal length")
+        );
     }
 
     #[test]
     fn disjunctive_prevents_overlap() {
         let resp = solve_csp_ir(problem(
             vec![int_range("s0", 0, 20), int_range("s1", 0, 20)],
-            vec![constraint(ConstraintKind::Disjunctive { starts: vec![var("s0"), var("s1")], durations: vec![5, 5] })],
+            vec![constraint(ConstraintKind::Disjunctive {
+                starts: vec![var("s0"), var("s1")],
+                durations: vec![5, 5],
+            })],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
-        assert!(a["s0"] + 5 <= a["s1"] || a["s1"] + 5 <= a["s0"], "tasks must not overlap");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
+        assert!(
+            a["s0"] + 5 <= a["s1"] || a["s1"] + 5 <= a["s0"],
+            "tasks must not overlap"
+        );
     }
 
     #[test]
@@ -1117,12 +1520,17 @@ mod tests {
                     index: var("index"),
                     rhs: var("looked_up"),
                 }),
-                constraint(ConstraintKind::LinearEq { terms: vec![var("index")], rhs: 1 }),
+                constraint(ConstraintKind::LinearEq {
+                    terms: vec![var("index")],
+                    rhs: 1,
+                }),
             ],
             SolveMode::Satisfy,
         ));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(a["looked_up"], 20);
     }
 
@@ -1132,17 +1540,27 @@ mod tests {
     /// just hand-derived. Used by the `example_*` tests below.
     fn load_example(filename: &str) -> CspIrProblem {
         let path = format!("{}/examples/{}", env!("CARGO_MANIFEST_DIR"), filename);
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
-        let start = text.find("```json\n").unwrap_or_else(|| panic!("{filename}: no json block found")) + "```json\n".len();
-        let end = start + text[start..].find("\n```").unwrap_or_else(|| panic!("{filename}: unterminated json block"));
-        serde_json::from_str(&text[start..end]).unwrap_or_else(|e| panic!("{filename}: invalid IR JSON: {e}"))
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+        let start = text
+            .find("```json\n")
+            .unwrap_or_else(|| panic!("{filename}: no json block found"))
+            + "```json\n".len();
+        let end = start
+            + text[start..]
+                .find("\n```")
+                .unwrap_or_else(|| panic!("{filename}: unterminated json block"));
+        serde_json::from_str(&text[start..end])
+            .unwrap_or_else(|e| panic!("{filename}: invalid IR JSON: {e}"))
     }
 
     #[test]
     fn example_01_send_more_money() {
         let resp = solve_csp_ir(load_example("01_send_more_money.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         let send = 1000 * a["S"] + 100 * a["E"] + 10 * a["N"] + a["D"];
         let more = 1000 * a["M"] + 100 * a["O"] + 10 * a["R"] + a["E"];
         let money = 10000 * a["M"] + 1000 * a["O"] + 100 * a["N"] + 10 * a["E"] + a["Y"];
@@ -1155,16 +1573,32 @@ mod tests {
     fn example_02_n_queens() {
         let resp = solve_csp_ir(load_example("02_n_queens.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
-        let cols: Vec<i32> = (0..8).map(|i| a[&format!("queens_{i}")]).collect();
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
+        let cols: Vec<i32> = (0..8)
+            .map(|i| a[&format!("queens_{i}")])
+            .collect();
         let mut sorted = cols.clone();
         sorted.sort();
-        assert_eq!(sorted, (0..8).collect::<Vec<_>>(), "columns must be pairwise distinct");
+        assert_eq!(
+            sorted,
+            (0..8).collect::<Vec<_>>(),
+            "columns must be pairwise distinct"
+        );
         for i in 0..8 {
             for j in (i + 1)..8 {
                 let row_gap = (i as i32) - (j as i32);
-                assert_ne!(cols[i] - cols[j], row_gap, "diagonal conflict between rows {i} and {j}");
-                assert_ne!(cols[i] - cols[j], -row_gap, "diagonal conflict between rows {i} and {j}");
+                assert_ne!(
+                    cols[i] - cols[j],
+                    row_gap,
+                    "diagonal conflict between rows {i} and {j}"
+                );
+                assert_ne!(
+                    cols[i] - cols[j],
+                    -row_gap,
+                    "diagonal conflict between rows {i} and {j}"
+                );
             }
         }
     }
@@ -1174,24 +1608,34 @@ mod tests {
         let resp = solve_csp_ir(load_example("03_traveling_salesman.md"));
         assert_eq!(resp.status, "OPTIMAL");
         assert_eq!(resp.objective_value, Some(80));
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         // The successor relation must be a single 4-cycle through all
         // cities, not two disjoint 2-cycles -- exactly what MTZ rules out.
         let mut visited = [false; 4];
         let mut city = 0;
         for _ in 0..4 {
-            assert!(!visited[city], "revisited city {city} before completing the tour");
+            assert!(
+                !visited[city],
+                "revisited city {city} before completing the tour"
+            );
             visited[city] = true;
             city = a[&format!("next_{city}")] as usize;
         }
-        assert_eq!(city, 0, "tour must return to the start after visiting all 4 cities");
+        assert_eq!(
+            city, 0,
+            "tour must return to the start after visiting all 4 cities"
+        );
     }
 
     #[test]
     fn example_04_house_construction_schedule() {
         let resp = solve_csp_ir(load_example("04_house_construction_schedule.md"));
         assert_eq!(resp.status, "OPTIMAL");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(a["painting_start"] + 2, a["makespan"]);
         assert!(a["framing_start"] >= a["foundation_start"] + 4);
         assert!(a["plumbing_start"] >= a["framing_start"] + 6);
@@ -1205,7 +1649,9 @@ mod tests {
     fn example_05_mini_sudoku() {
         let resp = solve_csp_ir(load_example("05_mini_sudoku.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!(a["cell_0_0"], 1);
         assert_eq!(a["cell_0_3"], 4);
         assert_eq!(a["cell_1_2"], 1);
@@ -1213,14 +1659,26 @@ mod tests {
         assert_eq!(a["cell_3_0"], 4);
         assert_eq!(a["cell_3_3"], 1);
         for r in 0..4 {
-            let mut row: Vec<i32> = (0..4).map(|c| a[&format!("cell_{r}_{c}")]).collect();
+            let mut row: Vec<i32> = (0..4)
+                .map(|c| a[&format!("cell_{r}_{c}")])
+                .collect();
             row.sort();
-            assert_eq!(row, vec![1, 2, 3, 4], "row {r} must contain each digit once");
+            assert_eq!(
+                row,
+                vec![1, 2, 3, 4],
+                "row {r} must contain each digit once"
+            );
         }
         for c in 0..4 {
-            let mut col: Vec<i32> = (0..4).map(|r| a[&format!("cell_{r}_{c}")]).collect();
+            let mut col: Vec<i32> = (0..4)
+                .map(|r| a[&format!("cell_{r}_{c}")])
+                .collect();
             col.sort();
-            assert_eq!(col, vec![1, 2, 3, 4], "column {c} must contain each digit once");
+            assert_eq!(
+                col,
+                vec![1, 2, 3, 4],
+                "column {c} must contain each digit once"
+            );
         }
     }
 
@@ -1228,8 +1686,14 @@ mod tests {
     fn example_06_dinner_pairing_table() {
         let resp = solve_csp_ir(load_example("06_dinner_pairing_table.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
-        assert_eq!((a["meal"], a["drink"]), (1, 1), "expected Steak(1) + Red(1)");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
+        assert_eq!(
+            (a["meal"], a["drink"]),
+            (1, 1),
+            "expected Steak(1) + Red(1)"
+        );
     }
 
     #[test]
@@ -1237,15 +1701,22 @@ mod tests {
         let resp = solve_csp_ir(load_example("07_knapsack_optimization.md"));
         assert_eq!(resp.status, "OPTIMAL");
         assert_eq!(resp.objective_value, Some(12));
-        let a = resp.assignment.expect("expected an assignment");
-        assert_eq!((a["take_A"], a["take_B"], a["take_C"], a["take_D"]), (0, 1, 0, 1));
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
+        assert_eq!(
+            (a["take_A"], a["take_B"], a["take_C"], a["take_D"]),
+            (0, 1, 0, 1)
+        );
     }
 
     #[test]
     fn example_08_arithmetic_puzzle() {
         let resp = solve_csp_ir(load_example("08_arithmetic_puzzle.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         assert_eq!((a["a"], a["b"], a["c"]), (3, 6, 18));
     }
 
@@ -1253,9 +1724,13 @@ mod tests {
     fn example_09_job_sequencing() {
         let resp = solve_csp_ir(load_example("09_job_sequencing.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let a = resp.assignment.expect("expected an assignment");
+        let a = resp
+            .assignment
+            .expect("expected an assignment");
         let durations = [3, 5, 2, 4];
-        let starts: Vec<i32> = (1..=4).map(|i| a[&format!("start_{i}")]).collect();
+        let starts: Vec<i32> = (1..=4)
+            .map(|i| a[&format!("start_{i}")])
+            .collect();
         for i in 0..4 {
             for j in (i + 1)..4 {
                 assert!(
@@ -1274,7 +1749,9 @@ mod tests {
     fn example_10_dinner_party_logic() {
         let resp = solve_csp_ir(load_example("10_dinner_party_logic.md"));
         assert_eq!(resp.status, "SATISFIABLE");
-        let solutions = resp.solutions.expect("expected solutions");
+        let solutions = resp
+            .solutions
+            .expect("expected solutions");
         assert_eq!(solutions.len(), 15);
         for s in &solutions {
             assert!(s["attends_alice"] == 1 || s["attends_bob"] == 1);
@@ -1282,7 +1759,10 @@ mod tests {
             if s["dana_after_party"] == 1 {
                 assert_eq!(s["attends_dana"], 1);
             }
-            let all_attend = s["attends_alice"] == 1 && s["attends_bob"] == 1 && s["attends_carol"] == 1 && s["attends_dana"] == 1;
+            let all_attend = s["attends_alice"] == 1
+                && s["attends_bob"] == 1
+                && s["attends_carol"] == 1
+                && s["attends_dana"] == 1;
             assert_eq!(s["full_house"] == 1, all_attend);
         }
     }
