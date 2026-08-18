@@ -40,3 +40,8 @@ Double-check before running for real:
 cargo build --release   # needs rustc 1.85+
 cargo run
 ```
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.

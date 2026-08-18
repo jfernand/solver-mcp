@@ -3,6 +3,7 @@ name = "solver-mcp"
 version = "0.1.0"
 edition = "2024"
 description = "MCP server exposing Pumpkin (CP) and microlp (LP/MILP) as an optimization brain for agents."
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 # Pure-Rust Lazy Clause Generation constraint solver (ConSol Lab / TU Delft).
