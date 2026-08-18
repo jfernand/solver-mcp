@@ -48,7 +48,7 @@ async fn lists_all_tools() {
 
     let tools = client.list_all_tools().await.expect("tools/list failed");
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    for expected in ["solve_csp", "solve_grouped_csp", "solve_scheduling", "solve_lp", "solve_assignment"] {
+    for expected in ["solve_csp", "solve_grouped_csp", "solve_scheduling", "solve_csp_ir", "solve_lp", "solve_assignment"] {
         assert!(names.contains(&expected), "missing tool: {expected}");
     }
 
@@ -123,6 +123,37 @@ async fn calls_solve_scheduling() {
     .await;
     assert_eq!(parsed["status"], "SATISFIABLE");
     assert_eq!(parsed["starts"].as_array().unwrap().len(), 2);
+
+    client.cancel().await.expect("clean shutdown failed");
+}
+
+#[tokio::test]
+async fn calls_solve_csp_ir() {
+    let client = spawn_client().await;
+
+    // Same all-different-over-{0,1,2} problem as calls_solve_csp, expressed
+    // in the general IR to check the transport/registration wiring for the
+    // new tool specifically (solver-logic edge cases are covered by the
+    // unit tests in csp_ir.rs).
+    let parsed = call_tool_json(
+        &client,
+        "solve_csp_ir",
+        json!({
+            "variables": [
+                {"kind": "int_range", "name": "a", "min": 0, "max": 2},
+                {"kind": "int_range", "name": "b", "min": 0, "max": 2},
+                {"kind": "int_range", "name": "c", "min": 0, "max": 2}
+            ],
+            "constraints": [
+                {"kind": "all_different", "vars": [{"var": "a"}, {"var": "b"}, {"var": "c"}]}
+            ],
+            "solve": {"mode": "satisfy"}
+        }),
+    )
+    .await;
+    assert_eq!(parsed["status"], "SATISFIABLE");
+    let assignment = parsed["assignment"].as_object().unwrap();
+    assert_eq!(assignment.len(), 3);
 
     client.cancel().await.expect("clean shutdown failed");
 }
