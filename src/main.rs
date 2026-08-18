@@ -1,6 +1,8 @@
+mod csp_ir;
 mod csp_tools;
 mod lp_tools;
 
+use csp_ir::{solve_csp_ir, CspIrProblem};
 use csp_tools::{solve_csp, solve_grouped_csp, solve_scheduling, CspRequest, GroupedCspRequest, ScheduleRequest};
 use lp_tools::{solve_assignment, solve_lp, AssignmentRequest, LpRequest};
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -69,6 +71,29 @@ impl SolverServer {
     async fn solve_scheduling(&self, Parameters(req): Parameters<ScheduleRequest>) -> Result<CallToolResult, McpError> {
         Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&solve_scheduling(req)).unwrap(),
+        )]))
+    }
+
+    /// Solves a constraint-satisfaction or optimisation problem expressed
+    /// in the general CSP intermediate representation: named int/bool
+    /// variables, a flat list of constraints (one kind per Pumpkin
+    /// constraint primitive -- linear (in)equalities, arithmetic
+    /// (plus/times/division/absolute/min/max), all-different, cumulative
+    /// and disjunctive scheduling, element, table, and boolean
+    /// clause/conjunction, each optionally half- or fully-reified against
+    /// a boolean literal), and a solve directive (first solution, several
+    /// distinct solutions, or optimise an objective variable). Use this
+    /// instead of `solve_csp`/`solve_grouped_csp`/`solve_scheduling` for
+    /// anything those narrower tools can't express -- reified/conditional
+    /// constraints, table constraints, disjunctive (no-overlap)
+    /// scheduling, arithmetic decompositions, or optimisation over a CP
+    /// (not LP) model. See `examples/` in the repo for worked problems
+    /// (SEND+MORE=MONEY, N-Queens, TSP, job-shop scheduling, knapsack,
+    /// Sudoku, and more) paired with their IR formulation.
+    #[tool]
+    async fn solve_csp_ir(&self, Parameters(req): Parameters<CspIrProblem>) -> Result<CallToolResult, McpError> {
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&solve_csp_ir(req)).unwrap(),
         )]))
     }
 
