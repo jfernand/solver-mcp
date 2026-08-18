@@ -628,10 +628,7 @@ fn empty_response(status: &str) -> CspIrResponse {
 /// docs for what "resolves" entails and what gets reported as `ERROR`
 /// rather than risking a panic.
 pub fn solve_csp_ir(req: CspIrProblem) -> CspIrResponse {
-    match solve_csp_ir_inner(req) {
-        Ok(response) => response,
-        Err(error) => CspIrResponse { error: Some(error), ..empty_response("ERROR") },
-    }
+    solve_csp_ir_inner(req).unwrap_or_else(|error| CspIrResponse { error: Some(error), ..empty_response("ERROR") })
 }
 
 fn solve_csp_ir_inner(req: CspIrProblem) -> Result<CspIrResponse, String> {
