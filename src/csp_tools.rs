@@ -8,10 +8,11 @@
 use pumpkin_solver::Solver;
 use pumpkin_solver::conflict_resolvers::resolvers::ResolutionResolver;
 use pumpkin_solver::core::results::{ProblemSolution, SatisfactionResult};
-use pumpkin_solver::core::termination::Indefinite;
+use pumpkin_solver::core::termination::TimeBudget;
 use pumpkin_solver::core::variables::TransformableVariable;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct CspRequest {
@@ -61,9 +62,7 @@ pub fn solve_csp(req: CspRequest) -> CspResponse {
             .post();
     }
 
-    let mut termination = Indefinite; // wrap with a real time-budgeted
-    // termination condition in production;
-    // Indefinite is illustrative here.
+    let mut termination = TimeBudget::starting_now(Duration::from_secs(req.max_time_seconds));
     let mut brancher = solver.default_brancher();
     let mut resolver = ResolutionResolver::default();
 
@@ -316,7 +315,7 @@ pub fn solve_grouped_csp(req: GroupedCspRequest) -> GroupedCspResponse {
         }
     }
 
-    let mut termination = Indefinite;
+    let mut termination = TimeBudget::starting_now(Duration::from_secs(req.max_time_seconds));
     let mut brancher = solver.default_brancher();
     let mut resolver = ResolutionResolver::default();
 
@@ -409,7 +408,7 @@ pub fn solve_scheduling(req: ScheduleRequest) -> ScheduleResponse {
         ))
         .post();
 
-    let mut termination = Indefinite;
+    let mut termination = TimeBudget::starting_now(Duration::from_secs(req.max_time_seconds));
     let mut brancher = solver.default_brancher();
     let mut resolver = ResolutionResolver::default();
 
