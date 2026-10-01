@@ -1,5 +1,7 @@
 # solver-mcp
 
+[![CI](https://github.com/jfernand/solver-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jfernand/solver-mcp/actions/workflows/ci.yml)
+
 A self-contained "optimization brain" MCP server: pure-Rust constraint
 programming (Pumpkin) and linear programming (microlp), no FFI, no system
 solver libraries, single static binary.
